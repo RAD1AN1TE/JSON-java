@@ -4,11 +4,19 @@ package org.json;
 Public Domain.
 */
 
+
+import org.xml.sax.Attributes;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.DefaultHandler;
+
+import javax.xml.parsers.SAXParser;
+import javax.xml.parsers.SAXParserFactory;
 import java.io.Reader;
 import java.io.StringReader;
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.util.Iterator;
+import java.util.*;
 
 /**
  * This provides static methods to convert an XML text into a JSONObject, and to
@@ -1128,5 +1136,180 @@ public class XML {
             sb.append(' ');
         }
         return sb.toString();
+    }
+
+    /**
+     * Convert XML from {@code reader} to JSON and return only the element
+     * (and its children) referenced by {@code targetPath}.
+     *
+     * @param reader      the XML source
+     * @param targetPath  JSON Pointer to the element to extract
+     * @return            a {@link JSONObject} whose single top-level key is the
+     *                    element named in {@code targetPath}; empty if not found
+     * @throws JSONException on parsing or conversion errors
+     */
+    public static JSONObject toJSONObject(Reader reader, JSONPointer targetPath) throws JSONException {
+        // Path tracking
+        final Stack<String> pathStack = new Stack<>();
+        final Stack<Object> valueStack = new Stack<>();
+        final StringBuilder currentText = new StringBuilder();
+        final JSONObject[] result = new JSONObject[1];
+        final String pointerString = targetPath.toString();
+
+        try {
+            SAXParserFactory factory = SAXParserFactory.newInstance();
+            SAXParser saxParser = factory.newSAXParser();
+
+            DefaultHandler handler = new DefaultHandler() {
+
+                boolean matching = false;
+                int matchDepth = 0;
+
+                @Override
+                public void startElement(String uri, String localName, String qName, Attributes attributes) {
+                    pathStack.push(qName);
+                    currentText.setLength(0);
+
+                    // Build current path
+                    String currentPath = "/" + String.join("/", pathStack);
+                    String targetPathString = targetPath.toString();
+                    // Handles trailing slash
+                    if (targetPathString.endsWith("/") && !currentPath.endsWith("/")) {
+                        currentPath += "/";
+                    }
+                    if (currentPath.equals(targetPathString)) {
+                        matching = true;
+                        matchDepth = pathStack.size();
+                        valueStack.push(new JSONObject());
+                    }
+
+                    // Build attributes if within match
+                    if (matching && pathStack.size() > matchDepth) {
+                        JSONObject obj = new JSONObject();
+                        for (int i = 0; i < attributes.getLength(); i++) {
+                            obj.put(attributes.getQName(i), attributes.getValue(i));
+                        }
+                        valueStack.push(obj);
+                    }
+                }
+
+                @Override
+                public void characters(char[] ch, int start, int length) {
+                    if (matching) {
+                        currentText.append(ch, start, length);
+                    }
+                }
+
+                @Override
+                public void endElement(String uri, String localName, String qName) throws SAXTerminationException {
+                    String popped = pathStack.pop();
+                    if (!popped.equals(qName)) {
+                        pathStack.push(popped);
+                        return;
+                    }
+
+                    if (matching) {
+                        Object val = currentText.toString().trim();
+
+                        // If closing a matched element
+                        if (pathStack.size() + 1 >= matchDepth) {
+                            Object obj = valueStack.pop();
+
+                            if (obj instanceof JSONObject && !((JSONObject) obj).isEmpty()) {
+                                if (!val.toString().isEmpty()) ((JSONObject) obj).put("content", val);
+                                val = obj;
+                            }
+
+                            // Store result and exit early
+                            if (valueStack.isEmpty()) {
+                                result[0] = new JSONObject();
+                                result[0].put(qName, val);
+                                throw new SAXTerminationException();
+                            } else {
+                                Object parent = valueStack.peek();
+                                if (parent instanceof JSONObject) {
+                                    ((JSONObject) parent).put(qName, val);
+                                }
+                            }
+                        }
+
+                        currentText.setLength(0); // reset for next element
+                    }
+                }
+            };
+
+            saxParser.parse(new InputSource(reader), handler);
+
+        } catch (SAXTerminationException e) {
+        } catch (Exception e) {
+            throw new JSONException(e);
+        }
+
+        return result[0] != null ? result[0] : new JSONObject();
+    }
+
+    private static class SAXTerminationException extends SAXException {
+        private static final long serialVersionUID = 1L;
+
+        public SAXTerminationException() {
+            super("Terminating SAX Parsing Early");
+        }
+    }
+
+    /**
+     * Parse the XML, replace the element at {@code path} with
+     * {@code replacement}, and return the whole document as JSON.
+     *
+     * @param reader       the XML source
+     * @param path         JSON Pointer to the element to replace
+     * @param replacement  value or object to put at {@code path}
+     * @return             the root {@link JSONObject} with the update applied
+     * @throws JSONException if {@code path} is invalid or parsing fails
+     */
+    public static JSONObject toJSONObject(Reader reader, JSONPointer path, JSONObject replacement) throws JSONException {
+        JSONObject root = toJSONObject(reader);
+
+        // Handle root path
+        if (path.toString().isEmpty() || path.toString().equals("/")) {
+            return replacement;
+        }
+
+        // Clean and split path
+        List<String> tokens = new ArrayList<>();
+        String pathStr = path.toString();
+        if (pathStr.endsWith("/") && pathStr.length() > 1) {
+            pathStr = pathStr.substring(0, pathStr.length() - 1);
+        }
+
+        for (String token : pathStr.substring(1).split("/")) {
+            if (!token.isEmpty()) {
+                tokens.add(token);
+            }
+        }
+
+        if (tokens.isEmpty()) {
+            return replacement;
+        }
+
+        // Traverse to parent
+        JSONObject cursor = root;
+        for (int i = 0; i < tokens.size() - 1; i++) {
+            String token = tokens.get(i);
+            Object next = cursor.opt(token);
+            if (next instanceof JSONObject) {
+                cursor = (JSONObject) next;
+            } else {
+                throw new JSONException("Path does not exist: " + path.toString());
+            }
+        }
+
+        // Replace target
+        String leaf = tokens.get(tokens.size() - 1);
+        Object value = replacement;
+        if (replacement.length() == 1 && replacement.has(leaf)) {
+            value = replacement.get(leaf);
+        }
+        cursor.put(leaf, value);
+        return root;
     }
 }

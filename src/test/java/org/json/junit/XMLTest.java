@@ -1426,6 +1426,73 @@ public class XMLTest {
         assertEquals(jsonObject3.getJSONObject("color").getString("value"), "008E97");
     }
 
+    @Test
+    public void testToJSONObjectWithJSONPointerExtract() {
+        String xml = "<root><person><name>Tej</name><age>25</age></person></root>";
+        JSONPointer pointer = new JSONPointer("/root/person");
+
+        JSONObject result = XML.toJSONObject(new StringReader(xml), pointer);
+
+        assertTrue(result.has("person"));
+        JSONObject person = result.getJSONObject("person");
+        assertEquals("Tej", person.getString("name"));
+        assertEquals("25", person.getString("age"));
+    }
+
+    @Test
+    public void testToJSONObjectWithJSONPointerReplacement() {
+        String xml = "<root><person><name>Old</name><age>99</age></person></root>";
+        JSONPointer pointer = new JSONPointer("/root/person");
+
+        JSONObject replacement = new JSONObject();
+        replacement.put("name", "NewName");
+        replacement.put("age", 26);
+
+        JSONObject updated = XML.toJSONObject(new StringReader(xml), pointer, replacement);
+
+        assertTrue(updated.has("root"));
+        assertTrue(updated.getJSONObject("root").has("person"));
+
+        JSONObject person = updated.getJSONObject("root").getJSONObject("person");
+        assertEquals("NewName", person.getString("name"));
+        assertEquals(26, person.getInt("age"));
+
+        assertEquals(2, person.length());
+    }
+
+    @Test
+    public void testExtractWithTrailingSlash() {
+        String xml = "<root><x>y</x></root>";
+        JSONPointer ptr = new JSONPointer("/root/x/");
+        JSONObject obj = XML.toJSONObject(new StringReader(xml), ptr);
+        assertEquals("y", obj.getString("x"));
+    }
+
+    @Test
+    public void testReplacementUnwrapsLeaf() {
+        String xml = "<a><b>old</b></a>";
+        JSONPointer ptr = new JSONPointer("/a/b");
+        JSONObject repl = XML.toJSONObject("<b>new</b>");
+        JSONObject out = XML.toJSONObject(new StringReader(xml), ptr, repl);
+
+        assertEquals("new", out.getJSONObject("a").getString("b"));
+    }
+
+    @Test
+    public void testExtractPathNotFoundReturnsEmpty() {
+        String xml = "<a><b>c</b></a>";
+        JSONObject out = XML.toJSONObject(new StringReader(xml),
+                new JSONPointer("/a/missing"));
+        assertTrue(out.isEmpty());
+    }
+
+    @Test(expected = JSONException.class)
+    public void testReplaceParentPathNotFoundThrows() {
+        String xml = "<a><b>c</b></a>";
+        JSONObject repl = new JSONObject().put("dummy", 1);
+        XML.toJSONObject(new StringReader(xml),
+                new JSONPointer("/a/x/missing"), repl);
+    }
 }
 
 
