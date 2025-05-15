@@ -17,6 +17,7 @@ import java.io.StringReader;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.*;
+import java.util.function.Function;
 
 /**
  * This provides static methods to convert an XML text into a JSONObject, and to
@@ -1311,5 +1312,119 @@ public class XML {
         }
         cursor.put(leaf, value);
         return root;
+    }
+
+    /**
+     * Convert a well-formed XML to JSONObject while applying a key transformation during parsing.
+     *
+     * @param reader         The XML source reader.
+     * @param keyTransformer A function to transform all tag and attribute keys.
+     * @return A JSONObject with transformed keys.
+     * @throws JSONException Thrown if any parsing error occurs.
+     */
+    public static JSONObject toJSONObject(Reader reader, Function<String, String> keyTransformer) throws JSONException {
+        JSONObject jo = new JSONObject();
+        XMLTokener x = new XMLTokener(reader, XMLParserConfiguration.ORIGINAL);
+        while (x.more()) {
+            x.skipPast("<");
+            if (x.more()) {
+                // Parse and apply transformation directly during parsing.
+                parseWithKeyTransform(x, jo, null, XMLParserConfiguration.ORIGINAL, 0, keyTransformer);
+            }
+        }
+        return jo;
+    }
+
+    /**
+     * Parses XML tokens and applies key transformations directly while parsing.
+     *
+     * @param x                  The XMLTokener providing tokens.
+     * @param context            The current JSON object being constructed.
+     * @param name               The expected closing tag name.
+     * @param config             Parser configuration.
+     * @param currentNestingDepth Current depth of XML nesting.
+     * @param keyTransformer     Function to transform tag and attribute keys.
+     * @return true if closing tag is processed, false otherwise.
+     * @throws JSONException Thrown on parsing errors.
+     */
+    private static boolean parseWithKeyTransform(XMLTokener x,
+                                                 JSONObject context,
+                                                 String name,
+                                                 XMLParserConfiguration config,
+                                                 int currentNestingDepth,
+                                                 Function<String, String> keyTransformer) throws JSONException {
+
+        Object token = x.nextToken();
+
+        if (token == BANG || token == QUEST) {
+            // Handle comments and processing instructions
+            x.skipPast(token == BANG ? "-->" : "?>");
+            return false;
+
+        } else if (token == SLASH) {
+            // Handle closing tag
+            token = x.nextToken();
+            if (!(token instanceof String)) {
+                throw x.syntaxError("Expected a closing tag name but found: " + token);
+            }
+            String closingTag = keyTransformer.apply((String) token);
+            if (name == null || !closingTag.equals(name)) {
+                throw x.syntaxError("Mismatched close tag: " + token);
+            }
+            if (x.nextToken() != GT) {
+                throw x.syntaxError("Misshaped close tag.");
+            }
+            return true;
+
+        } else if (token instanceof String) {
+            // Opening tag found
+            String tagName = keyTransformer.apply((String) token);
+            JSONObject jsonObject = new JSONObject();
+
+            while (true) {
+                token = x.nextToken();
+
+                if (token instanceof String) {
+                    // Handle attribute: key="value"
+                    String attrName = keyTransformer.apply((String) token);
+                    if (x.nextToken() != EQ) throw x.syntaxError("Missing '=' in attribute.");
+                    Object attrValue = x.nextToken();
+                    jsonObject.accumulate(attrName, attrValue);
+
+                } else if (token == SLASH) {
+                    // Handle self-closing tag: <tag ... />
+                    if (x.nextToken() != GT) throw x.syntaxError("Misshaped tag.");
+                    context.accumulate(tagName, jsonObject.length() > 0 ? jsonObject : "");
+                    return false;
+
+                } else if (token == GT) {
+                    // Start parsing content or child tags
+                    while (true) {
+                        token = x.nextContent();
+                        if (token == null) {
+                            throw x.syntaxError("Unclosed tag " + tagName);
+                        } else if (token instanceof String) {
+                            // Text content inside the tag
+                            String content = (String) token;
+                            if (!content.isEmpty()) {
+                                jsonObject.accumulate(config.getcDataTagName(), content);
+                            }
+                        } else if (token == LT) {
+                            // Nested tag found
+                            if (parseWithKeyTransform(x, jsonObject, tagName, config, currentNestingDepth + 1, keyTransformer)) {
+                                // Completed parsing the current tag
+                                context.accumulate(tagName, jsonObject.length() > 0 ? jsonObject : "");
+                                return false;
+                            }
+                        }
+                    }
+
+                } else {
+                    throw x.syntaxError("Misshaped tag.");
+                }
+            }
+        }
+
+        throw x.syntaxError("Misshaped tag.");
     }
 }

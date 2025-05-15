@@ -21,6 +21,7 @@ import java.io.StringReader;
 import java.nio.charset.Charset;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Function;
 
 import org.json.*;
 import org.junit.Rule;
@@ -1492,6 +1493,68 @@ public class XMLTest {
         JSONObject repl = new JSONObject().put("dummy", 1);
         XML.toJSONObject(new StringReader(xml),
                 new JSONPointer("/a/x/missing"), repl);
+    }
+
+    @Test
+    public void testKeyTransformationUppercase() {
+        String xml = "<root><child/></root>";
+        Function<String, String> transformer = String::toUpperCase;
+
+        JSONObject result = XML.toJSONObject(new StringReader(xml), transformer);
+
+        assertTrue(result.has("ROOT"));
+        JSONObject root = result.getJSONObject("ROOT");
+        assertTrue(root.has("CHILD"));
+
+        Object childObj = root.get("CHILD");
+        if (childObj instanceof JSONObject) {
+            assertTrue(((JSONObject) childObj).isEmpty());
+        } else if (childObj instanceof String) {
+            assertEquals("", childObj);  // Empty string for self-closing tag
+        } else {
+            fail("Unexpected type for CHILD: " + childObj.getClass());
+        }
+    }
+
+    @Test
+    public void testKeyTransformationUppercaseWithContent() {
+        String xml = "<root><child>value</child></root>";
+        Function<String, String> transformer = String::toUpperCase;
+
+        JSONObject result = XML.toJSONObject(new StringReader(xml), transformer);
+
+        assertTrue(result.has("ROOT"));
+        JSONObject root = result.getJSONObject("ROOT");
+        assertTrue(root.has("CHILD"));
+
+        Object childObj = root.get("CHILD");
+        if (childObj instanceof JSONObject) {
+            JSONObject childJson = (JSONObject) childObj;
+            assertTrue(childJson.has("content"));
+            assertEquals("value", childJson.getString("content"));
+        } else if (childObj instanceof String) {
+            // Direct string content case (just in case parser behaves differently)
+            assertEquals("value", childObj);
+        } else {
+            fail("Unexpected type for CHILD: " + childObj.getClass());
+        }
+    }
+
+    @Test
+    public void testKeyTransformationUppercaseWithAttributes() {
+        String xml = "<root><child attr=\"test\">value</child></root>";
+        Function<String, String> transformer = String::toUpperCase;
+
+        JSONObject result = XML.toJSONObject(new StringReader(xml), transformer);
+
+        assertTrue(result.has("ROOT"));
+        JSONObject root = result.getJSONObject("ROOT");
+        assertTrue(root.has("CHILD"));
+
+        JSONObject childJson = root.getJSONObject("CHILD");
+        assertEquals("test", childJson.getString("ATTR"));
+        assertTrue(childJson.has("content"));
+        assertEquals("value", childJson.getString("content"));
     }
 }
 
